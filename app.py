@@ -1,29 +1,27 @@
-# app.py
-# ---- BEGIN: robust import bootstrap (top of app.py) ----
+# ---- BEGIN: robust import bootstrap (VERY TOP of app.py) ----
 import os, sys
 import streamlit as st
 import pandas as pd
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-if APP_DIR not in sys.path:
-    sys.path.insert(0, APP_DIR)
+PROJECT_ROOT = os.path.dirname(APP_DIR)
 
-UTILS_DIR = os.path.join(APP_DIR, "utils")
-if os.path.isdir(UTILS_DIR) and UTILS_DIR not in sys.path:
-    sys.path.insert(0, UTILS_DIR)
 
-# First: load ml_helpers directly and expose any real error
+for p in (PROJECT_ROOT, APP_DIR):
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+
 try:
-    import ml_helpers as ML
+    from ndis_dashboard import ml_helpers as ML
     st.info(f"ml_helpers loaded from: {getattr(ML, '__file__', 'unknown')}")
 except Exception as e:
     st.error("Failed to import ml_helpers. Details:")
     st.exception(e)
+    st.write("sys.path:", sys.path)
     st.stop()
 
 
-
-# Next: import dashboard_pages and expose any real error
 try:
     from dashboard_pages import (
         display_executive_summary_section,
@@ -36,10 +34,6 @@ try:
 except Exception as e:
     st.error("Failed to import dashboard_pages. Details:")
     st.exception(e)
-    # Optional: probe where Python looked
-    import importlib.util
-    spec = importlib.util.find_spec("dashboard_pages")
-    st.caption(f"dashboard_pages spec: {spec}")
     st.stop()
 # ---- END: robust import bootstrap ----
 
@@ -47,9 +41,7 @@ except Exception as e:
 # ✅ Your modules
 from incident_mapping import render_incident_mapping
 from utils.ndis_enhanced_prep import prepare_ndis_data, create_comprehensive_features
-
-# ✅ ML helper (baseline training)
-from ml_helpers import predictive_models_comparison
+from ndis_dashboard.utils.generative import generate_summary_and_mitigations
 
 
 # ----- CONFIG -----
@@ -90,50 +82,6 @@ def load_data():
         df["incident_weekday"] = df["incident_date"].dt.day_name()
 
     return df
-
-
-# ----- OPTIONAL: ML trainer (sidebar) -----
-def sidebar_ml_controls(df_for_training: pd.DataFrame):
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("🤖 ML — Baselines")
-
-    target_choice = st.sidebar.selectbox(
-        "Target",
-        ["Reportable (binary)", "High/Critical (binary)"],
-        help="Reportable uses df['reportable_bin']; High/Critical uses severity_numeric>=3",
-    )
-
-    test_size = st.sidebar.slider("Test size", 0.10, 0.40, 0.25, 0.05)
-    seed = st.sidebar.number_input("Random seed", 0, 9999, 42, step=1)
-
-    if st.sidebar.button("Train models"):
-        use_df = df_for_training.copy()
-
-        # Decide target
-        if target_choice.startswith("Reportable"):
-            if "reportable_bin" not in use_df.columns:
-                st.sidebar.error("Column 'reportable_bin' not found after preparation.")
-                return
-            target_col = "reportable_bin"
-        else:
-            if "severity_numeric" not in use_df.columns:
-                st.sidebar.error("Column 'severity_numeric' not found after preparation.")
-                return
-            use_df["high_crit"] = (use_df["severity_numeric"] >= 3).astype(int)
-            target_col = "high_crit"
-
-        try:
-            models = predictive_models_comparison(
-                use_df, target=target_col, test_size=float(test_size), random_state=int(seed)
-            )
-            st.session_state.trained_models = models
-
-            # Quick success toast
-            best_name, best_blob = max(models.items(), key=lambda kv: kv[1]["accuracy"])
-            st.sidebar.success(f"Best: {best_name} • acc {best_blob['accuracy']:.2%}")
-        except Exception as e:
-            st.sidebar.error(f"Training failed: {e}")
-
 
 # ----- MAIN DASHBOARD -----
 def main():
@@ -181,7 +129,7 @@ def main():
     st.sidebar.header("Filters")
     filtered_df = df.copy()
 
-    # Date Filter
+    # 📅 Date Filter
     if "incident_date" in df.columns:
         min_date, max_date = df["incident_date"].min(), df["incident_date"].max()
         date_range = st.sidebar.date_input(
@@ -189,14 +137,14 @@ def main():
             [min_date, max_date],
             help="Filter incidents by date range",
         )
-        if len(date_range) == 2:
+        if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
             filtered_df = filtered_df[
                 (filtered_df["incident_date"] >= pd.to_datetime(date_range[0]))
                 & (filtered_df["incident_date"] <= pd.to_datetime(date_range[1]))
             ]
 
-    # Age Filter
-    if "participant_age" in df.columns:
+    # 👥 Age Filter
+    if "participant_age" in df.columns and not df["participant_age"].isna().all():
         age_min = int(df["participant_age"].min())
         age_max = int(df["participant_age"].max())
         age_range = st.sidebar.slider(
@@ -211,10 +159,10 @@ def main():
             & (filtered_df["participant_age"] <= age_range[1])
         ]
 
-    # Location Filter
+    # 🏢 Location Filter
     if "location" in df.columns:
         locations = sorted(df["location"].dropna().unique())
-        locations_with_all = ["All"] + locations
+        locations_with_all = ["All"] + list(locations)
         selected_location = st.sidebar.selectbox(
             "🏢 Location",
             options=locations_with_all,
@@ -224,7 +172,7 @@ def main():
         if selected_location != "All":
             filtered_df = filtered_df[filtered_df["location"] == selected_location]
 
-    # Severity Filter
+    # ⚠️ Severity Filter
     if "severity" in df.columns:
         severities = sorted(df["severity"].astype(str).dropna().unique())
         severities_with_all = ["All"] + list(severities)
@@ -237,7 +185,7 @@ def main():
         if selected_severity != "All":
             filtered_df = filtered_df[filtered_df["severity"].astype(str) == selected_severity]
 
-    # Incident Type Filter
+    # 📋 Incident Type Filter
     if "incident_type" in df.columns:
         incident_types = sorted(df["incident_type"].dropna().unique())
         incident_types_with_all = ["All"] + list(incident_types)
@@ -250,20 +198,28 @@ def main():
         if selected_incident_type != "All":
             filtered_df = filtered_df[filtered_df["incident_type"] == selected_incident_type]
 
-    # Reporter Type Filter
-    if "reported_by" in df.columns:
-        reporter_types = sorted(df["reported_by"].dropna().unique())
-        reporter_types_with_all = ["All"] + list(reporter_types)
-        selected_reporter_type = st.sidebar.selectbox(
-            "👤 Reporter Type",
-            options=reporter_types_with_all,
+    # 👤 Carer ID
+    if "carer_id" in df.columns:
+        carers = sorted(df["carer_id"].astype(str).dropna().unique())
+        carers_with_all = ["All"] + list(carers)
+        selected_carer = st.sidebar.selectbox(
+            "👤 Carer ID",
+            options=carers_with_all,
             index=0,
-            help="Filter by who reported the incident or 'All'",
+            help="Filter by carer or 'All'",
         )
-        if selected_reporter_type != "All":
-            filtered_df = filtered_df[filtered_df["reported_by"] == selected_reporter_type]
+        if selected_carer != "All":
+            filtered_df = filtered_df[filtered_df["carer_id"].astype(str) == selected_carer]
 
-    # Page-specific controls (in sidebar)
+    # 🧩 Group pipeline by (exposed for pipeline view)
+    group_by = st.sidebar.selectbox(
+        "Group pipeline by:",
+        options=["carer_id", "severity", "incident_type", "location"],
+        index=0,
+        help="Controls grouping in the Enhanced Investigation Pipeline",
+    )
+
+    # Page-specific controls
     st.sidebar.markdown("---")
     forecast_horizon = st.sidebar.slider("Forecast months", 3, 12, 6, 1, key="ml_forecast_months")
     top_n_causes = st.sidebar.slider("Top N causes (time chart)", 3, 10, 5, 1, key="ml_top_n_causes")
@@ -286,30 +242,32 @@ def main():
     if len(filtered_df) > 0:
         st.sidebar.metric(
             "Date Range (Days)",
-            (filtered_df["incident_date"].max() - filtered_df["incident_date"].min()).days,
+            (filtered_df["incident_date"].max() - filtered_df["incident_date"].min()).days
+            if "incident_date" in filtered_df.columns else 0,
         )
         st.sidebar.metric("Locations", filtered_df["location"].nunique() if "location" in filtered_df.columns else 0)
         st.sidebar.metric("Incident Types", filtered_df["incident_type"].nunique() if "incident_type" in filtered_df.columns else 0)
 
-        # Slightly safer quick stats using prepped columns (ML-related)
-        high_severity_pct = (filtered_df.get("severity_numeric", pd.Series([0]*len(filtered_df))) >= 3).mean() * 100
-        reportable_pct = filtered_df.get("reportable_bin", pd.Series([0]*len(filtered_df))).mean() * 100
+        # Quick stats using prepared columns (if present)
+        high_severity_pct = (
+            (filtered_df.get("severity_numeric", pd.Series([0]*len(filtered_df))) >= 3)
+            .mean() * 100
+            if len(filtered_df) else 0
+        )
+        reportable_pct = (
+            filtered_df.get("reportable_bin", pd.Series([0]*len(filtered_df))).mean() * 100
+            if len(filtered_df) else 0
+        )
 
         st.sidebar.markdown("**Quick Stats:**")
         st.sidebar.write(f"🔴 High/Critical: {high_severity_pct:.1f}%")
         st.sidebar.write(f"📊 Reportable: {reportable_pct:.1f}%")
 
-    # === ML: filtered features (optional convenience for pages) ===
-    try:
-        X_filt, feature_names_filt, features_df_filt = create_comprehensive_features(filtered_df)
-        st.session_state.features_df_filtered = features_df_filt
-        st.session_state.feature_names_filtered = feature_names_filt
-    except Exception:
-        st.session_state.features_df_filtered = None
-        st.session_state.feature_names_filtered = None
+    # === Make filters available to pages ===
+    st.session_state["APP_FILTERED_DF"] = filtered_df
+    st.session_state["APP_GROUP_BY"] = group_by
 
-    # === ML: trainer on current slice ===
-    sidebar_ml_controls(filtered_df)
+
 
     # ------ PAGE DISPATCH ------
     if page == "📊 Executive Summary":
@@ -323,6 +281,35 @@ def main():
     elif page == "🗺️ Incident Map":
         render_incident_mapping(df, filtered_df)
 
+def render_ai_summary_section(filtered_df, page_key: str = "global"):
+   
+
+    st.markdown("---")
+    st.markdown("## 🧠 AI Summary & Mitigations (beta)")
+    with st.expander("Show / hide", expanded=True):
+        st.caption(f"[debug] filtered_df rows: {len(filtered_df)}")
+        if len(filtered_df) > 0:
+            idx = st.number_input(
+                "Row index",
+                min_value=0,
+                max_value=len(filtered_df) - 1,
+                value=0,
+                step=1,
+                key=f"gen_idx_{page_key}"   # unique per page
+            )
+            row = filtered_df.iloc[int(idx)]
+            narrative = str(row["narrative"]) if "narrative" in filtered_df.columns else ""
+            summary, recs = generate_summary_and_mitigations(row, narrative=narrative)
+            st.markdown("**Summary**")
+            st.write(summary)
+            st.markdown("**Mitigation Recommendations**")
+            for r in recs:
+                st.write(f"- {r}")
+        else:
+            st.info("No rows available to summarise. Clear filters if needed.")
+
+
 
 if __name__ == "__main__":
     main()
+ 

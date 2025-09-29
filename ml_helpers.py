@@ -3,6 +3,7 @@
 # - Re-exports feature builders from utils.ndis_enhanced_prep (if present)
 # - Baseline visuals + models
 # - Enhanced analytics (confusion matrix, carer network, participant journey, risk scorer, similarity, alerts)
+# (optional) shebang / encoding / comments
 from __future__ import annotations
 
 import warnings
@@ -10,10 +11,8 @@ warnings.filterwarnings("ignore")
 
 from typing import Tuple, Dict, Any, Optional, List, Callable
 import re
-
 import numpy as np
 import pandas as pd
-
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -28,6 +27,26 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline
+
+# ---------------------------------------
+# Safe-length helpers (prevent length-1 vs 1000 mismatch)
+# ---------------------------------------
+def _is_scalar(x):
+    return not hasattr(x, "__len__") or isinstance(x, (str, bytes))
+
+def _ensure_length(values, n: int):
+    """Broadcast a length-1 sequence to length n; pass scalars through; validate exact matches."""
+    if _is_scalar(values):
+        return values  # Pandas will broadcast scalars
+    try:
+        L = len(values)
+    except Exception:
+        return values  # treat as scalar-ish
+    if L == n:
+        return values
+    if L == 1:
+        return np.repeat(np.asarray(values)[0], n)
+    raise ValueError(f"Length mismatch: trying to assign length {L} into {n} rows")
 
 # ---------------------------------------
 # Optional enhanced prep from utils/ (no __init__.py required)
@@ -47,6 +66,9 @@ def prepare_ndis_data(df: pd.DataFrame) -> pd.DataFrame:
     if _prepare_ndis_data is not None:
         return _prepare_ndis_data(df)
     return df.copy()
+
+
+
 
 
 # ---------------------------------------
@@ -479,9 +501,10 @@ def plot_carer_performance_scatter(df: pd.DataFrame) -> go.Figure:
         sev_map = {"Low": 1, "Medium": 2, "High": 3, "Critical": 4}
         work["severity_numeric"] = work["severity"].map(sev_map).fillna(2).astype(int)
 
-    if "medical_attention_required_bin" not in work.columns:
-        mar = work.get("medical_attention_required", pd.Series([0]*len(work)))
-        work["medical_attention_required_bin"] = mar.astype(str).str.lower().isin(["yes","true","1"]).astype(int)
+    # Robust derivation of medical_attention_required_bin
+    mar_raw = work.get("medical_attention_required", np.zeros(len(work), dtype=int))
+    mar = pd.Series(_ensure_length(mar_raw, len(work)), index=work.index)
+    work["medical_attention_required_bin"] = mar.astype(str).str.lower().isin(["yes","true","1"]).astype(int)
 
     g = work.groupby("carer_id").agg(
         incidents=("incident_id", "count"),
@@ -964,9 +987,10 @@ def incident_type_risk_profiling(df: pd.DataFrame) -> Tuple[pd.DataFrame, go.Fig
         sev_map = {"Low": 1, "Medium": 2, "High": 3, "Critical": 4}
         work["severity_numeric"] = work["severity"].map(sev_map).fillna(2).astype(int)
 
-    if "medical_attention_required_bin" not in work.columns:
-        mar = work.get("medical_attention_required", pd.Series([0]*len(work)))
-        work["medical_attention_required_bin"] = mar.astype(str).str.lower().isin(["yes","true","1"]).astype(int)
+    # Robust derivation of medical_attention_required_bin
+    mar_raw = work.get("medical_attention_required", np.zeros(len(work), dtype=int))
+    mar = pd.Series(_ensure_length(mar_raw, len(work)), index=work.index)
+    work["medical_attention_required_bin"] = mar.astype(str).str.lower().isin(["yes","true","1"]).astype(int)
 
     g = work.groupby("incident_type").agg(
         incidents=("incident_id","count"),
@@ -998,9 +1022,10 @@ def profile_location_risk(df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[go.F
         sev_map = {"Low": 1, "Medium": 2, "High": 3, "Critical": 4}
         work["severity_numeric"] = work["severity"].map(sev_map).fillna(2).astype(int)
 
-    if "medical_attention_required_bin" not in work.columns:
-        mar = work.get("medical_attention_required", pd.Series([0]*len(work)))
-        work["medical_attention_required_bin"] = mar.astype(str).str.lower().isin(["yes","true","1"]).astype(int)
+    # Robust derivation of medical_attention_required_bin
+    mar_raw = work.get("medical_attention_required", np.zeros(len(work), dtype=int))
+    mar = pd.Series(_ensure_length(mar_raw, len(work)), index=work.index)
+    work["medical_attention_required_bin"] = mar.astype(str).str.lower().isin(["yes","true","1"]).astype(int)
 
     g = work.groupby("location").agg(
         incidents=("incident_id","count"),
@@ -1080,13 +1105,10 @@ def carer_risk_network_analysis(df: pd.DataFrame):
         sev_map = {"Low": 1, "Medium": 2, "High": 3, "Critical": 4}
         work["severity_numeric"] = work["severity"].map(sev_map).fillna(2).astype(int)
 
-    # medical attention binary
-    if "medical_attention_required_bin" in work.columns:
-        mar = work["medical_attention_required_bin"].astype(int)
-    else:
-        mar = work.get("medical_attention_required", pd.Series([0]*len(work)))
-        mar = mar.astype(str).str.lower().isin(["yes","true","1"]).astype(int)
-    work["medical_attention_required_bin"] = mar
+    # medical attention binary (robust)
+    mar_raw = work.get("medical_attention_required", np.zeros(len(work), dtype=int))
+    mar = pd.Series(_ensure_length(mar_raw, len(work)), index=work.index)
+    work["medical_attention_required_bin"] = mar.astype(str).str.lower().isin(["yes","true","1"]).astype(int)
 
     risk_matrix = work.groupby(['carer_id', 'participant_id']).agg(
         incident_count=('incident_id', 'count'),
@@ -1528,3 +1550,85 @@ def integrate_enhanced_features(existing_main_function):
             add_enhanced_features_to_dashboard(df, X, feature_names, trained_models)
 
     return enhanced_main
+
+
+
+
+
+  
+
+
+    # ---------- Generative helpers: summaries + mitigations (rule-based) ----------
+
+from typing import Any, Dict, List, Tuple
+
+def _to_dict(row: Any) -> Dict[str, Any]:
+    try:
+        return row.to_dict()  # pandas Series
+    except Exception:
+        return dict(row) if isinstance(row, dict) else {}
+
+def _safe_int(x, default=None):
+    try:
+        return int(x)
+    except Exception:
+        return default
+
+def summarize_incident_row(row_like: Any) -> str:
+    """1–2 sentence summary from available fields (no PHI)."""
+    row = _to_dict(row_like)
+    typ = str(row.get("incident_type", "incident")).strip().title() or "Incident"
+    sev = str(row.get("severity", "Unknown")).strip()
+    loc = str(row.get("location", "Unknown")).strip()
+    carer = f"Carer {row.get('carer_id')}" if row.get("carer_id") else "Carer"
+    date = str(row.get("incident_date", "")).split(" ")[0]
+    delay = _safe_int(row.get("notification_delay_days"), None)
+    delay_txt = f", notified after {delay} day(s)" if delay is not None else ""
+    return (
+        f"On {date} at {loc}, a {typ} occurred (severity: {sev}){delay_txt}. "
+        f"{carer} documented the incident; follow-up actions were recorded where applicable."
+    )
+
+def recommend_mitigations(row_like: Any) -> List[str]:
+    """Short prioritized mitigations from simple rules (no PHI)."""
+    row = _to_dict(row_like)
+    recs: List[str] = []
+    sev_raw = str(row.get("severity", "")).lower()
+    typ = str(row.get("incident_type", "")).lower()
+    delay = _safe_int(row.get("notification_delay_days"), None)
+    rep = _safe_int(row.get("reportable_bin"), 0)
+
+    if delay is not None and delay > 1:
+        recs.append("Reinforce 24-hour notification SOP and enable auto-reminders at 12 hours.")
+    if "self" in typ or "harm" in typ:
+        recs.append("Initiate immediate risk review and update the participant safety plan with a clinician.")
+    if "medication" in typ:
+        recs.append("Run a double-check protocol refresher and update the MAR audit checklist.")
+    if "fall" in typ:
+        recs.append("Conduct an environment assessment and install fall-prevention aids.")
+    if sev_raw in {"high", "critical", "4", "5"} or (rep == 1 and sev_raw in {"moderate", "3"}):
+        recs.append("Escalate to on-call senior and schedule a post-incident debrief within 48 hours.")
+
+    if not recs:
+        recs.append("Log incident, review care-plan triggers, and schedule targeted refresher training.")
+
+    # de-duplicate while preserving order
+    seen = set(); out: List[str] = []
+    for r in recs:
+        if r not in seen:
+            out.append(r); seen.add(r)
+    return out
+
+def generate_summary_and_mitigations(
+    row_like: Any,
+    narrative: str | None = None,
+    llm_call: None | callable = None,
+) -> Tuple[str, List[str]]:
+    """
+    Returns (summary, mitigations). If llm_call is provided (prompt -> text),
+    you can swap to model-generated text later; for now we return rule-based outputs.
+    """
+    # For now, ignore llm_call and narrative; keep deterministic outputs
+    return summarize_incident_row(row_like), recommend_mitigations(row_like)
+
+
