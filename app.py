@@ -13,7 +13,7 @@ for p in (PROJECT_ROOT, APP_DIR):
 
 
 try:
-    from ndis_dashboard import ml_helpers as ML
+    import ml_helpers as ML
     st.info(f"ml_helpers loaded from: {getattr(ML, '__file__', 'unknown')}")
 except Exception as e:
     st.error("Failed to import ml_helpers. Details:")
